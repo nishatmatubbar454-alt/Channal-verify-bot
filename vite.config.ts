@@ -2,6 +2,7 @@ import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
 import {defineConfig, Plugin} from 'vite';
+import { GoogleGenAI } from '@google/genai';
 
 interface LogEntry {
   id: string;
@@ -152,6 +153,9 @@ OFFICIAL KNOWLEDGE BASE (Use these exact facts):
     return cleaned;
   };
 
+  // User membership in-memory cache (15 seconds TTL) to avoid repeat network checks
+  const userMembershipCache = new Map<number, { joined: boolean; time: number }>();
+
   const generateGeminiReply = async (
     userMessage: string,
     customKey?: string,
@@ -179,45 +183,52 @@ OFFICIAL KNOWLEDGE BASE (Use these exact facts):
 • উইথড্র করার নিয়ম: ওয়ালেট (Wallet) পেজে গিয়ে 'ক্যাশআউট' বাটনে চাপ দিলেই পেমেন্ট সিস্টেমগুলো চলে আসবে, সেখান থেকে পেমেন্ট রিকোয়েস্ট করতে পারবেন।
 • রেফার করার নিয়ম: এখান থেকে রেফার লিংকটি কপি করে বন্ধুদের আমন্ত্রণ জানান। তারা লিংকে ক্লিক করে একাউন্ট তৈরি করলেই আপনি রেফার বোনাস পেয়ে যাবেন।`;
 
-    // Dynamic length: if user asks for details/how-to/withdraw/delay/rules -> up to 300 chars, else ~120 chars
-    const lowerMsg = userMessage.toLowerCase();
+    const lowerMsg = userMessage.toLowerCase().trim();
     const isDetailQuery = /উইথড্র|উইথড্রো|ক্যাশ|টাকা|পেমেন্ট|দেরি|দেরী|রেফার|আমন্ত্রণ|নিয়ম|নিয়ম|কিভাবে|কীভাবে|কি ভাবে|কী ভাবে|বিকাশ|নগদ|বাইনান্স|ওয়ালেট|ওয়ালেট|বিস্তারিত|কবে|কেন|withdraw|payment|refer|rules|cashout|delay|how/i.test(lowerMsg) || userMessage.trim().length > 25;
     const targetMaxLen = isDetailQuery ? 300 : 120;
 
-    const modelsToTry = ['gemini-3.1-flash-lite', 'gemini-flash-latest', 'gemini-3.8-flash'];
+    // Instant zero-delay reply for standard short greetings (<10ms response)
+    if (/^(হাই|হ্যালো|hello|hi|hey|সালাম|আসসালামু আলাইকুম|হায়|hola)$/i.test(lowerMsg)) {
+      return "হ্যালো! Photo Cash-এ স্বাগতম। ফটো আপলোড এবং বন্ধুদের রেফার করে ইনকাম শুরু করতে নিচের Mini App বাটনে চাপুন।";
+    }
+
     let generatedText = '';
 
-    for (const model of modelsToTry) {
+    if (apiKey) {
       try {
-        const { GoogleGenAI } = await import('@google/genai');
         const ai = new GoogleGenAI({ apiKey });
-        const response = await ai.models.generateContent({
-          model,
+        const aiPromise = ai.models.generateContent({
+          model: 'gemini-2.5-flash',
           contents: userMessage,
           config: {
             systemInstruction,
-            temperature: 0.6,
+            temperature: 0.5,
           }
         });
 
-        if (response.text && response.text.trim()) {
+        // 2.2s strict timeout so the user never waits if AI network lags
+        const timeoutPromise = new Promise<never>((_, reject) => 
+          setTimeout(() => reject(new Error('AI timeout')), 2200)
+        );
+
+        const response: any = await Promise.race([aiPromise, timeoutPromise]);
+        if (response?.text && response.text.trim()) {
           generatedText = response.text.trim();
-          break;
         }
       } catch (err: any) {
-        console.warn(`[Gemini] model ${model} attempt warning:`, err?.message || err);
+        // Fast fallback on error or timeout
       }
     }
 
-    // Smart fallback if AI quota or error occurs
+    // Instant Bengali knowledge fallback
     let reply = generatedText;
     if (!reply) {
       if (/উইথড্র|উইথড্রো|ক্যাশ|টাকা|পেমেন্ট|বিকাশ|নগদ|বাইনান্স/i.test(lowerMsg)) {
         reply = "বিকাশ, নগদ ও বাইনান্সে ১-২ দিনে পেমেন্ট পাবেন (প্রথমবার ১৫টি রেফার লাগে)। ওয়ালেট পেজে ক্যাশআউটে রিকোয়েস্ট করুন।";
       } else if (/দেরি|দেরী|দেরিতে|পায়নি|পাইনি/i.test(lowerMsg)) {
-        reply = "আপনার বিকাশ/নগদ নাম্বার বা বাইনান্স এড্রেস সঠিক দিয়েছেন কিনা চেক করুন। পেমেন্ট ১০০% পাবেন, সাইটটি ৫ বছর ধরে বিশ্বস্ত!";
+        reply = "আপনার বিকাশ/নগদ নাম্বার বা বাইনান্স এড্রেস চেক করুন। পেমেন্ট ১০০% পাবেন, সাইটটি ৫ বছর ধরে বিশ্বস্ত!";
       } else if (/রেফার|আমন্ত্রণ|বোনাস/i.test(lowerMsg)) {
-        reply = "মিনি অ্যাপ থেকে রেফার লিংক কপি করে বন্ধুদের আমন্ত্রণ জানান। তারা একাউন্ট করলেই বোনাস পাবেন! এখানে সবচেয়ে সহজে ইনকাম রেফারেই।";
+        reply = "মিনি অ্যাপ থেকে রেফার লিংক কপি করে বন্ধুদের আমন্ত্রণ জানান। তারা একাউন্ট করলেই বোনাস পাবেন! রেফারে আয় সবচেয়ে সহজ।";
       } else if (/ফটো|ছবি|কাজ|ইনকাম|আয়|টাকা/i.test(lowerMsg)) {
         reply = "Photo Cash-এ ফটো আপলোড করে ও বন্ধুদের রেফার করে সহজে আয় করুন! কাজ শুরু করতে নিচে Mini App-এ ক্লিক করুন।";
       } else {
@@ -225,10 +236,7 @@ OFFICIAL KNOWLEDGE BASE (Use these exact facts):
       }
     }
 
-    // Strict Rule: Remove ANY raw URLs or website domains from text completely
     reply = cleanAllLinksAndUrls(reply);
-
-    // Strict Character Limit Enforcer
     if (reply.length > targetMaxLen) {
       reply = reply.slice(0, targetMaxLen - 1) + '…';
     }
@@ -250,10 +258,10 @@ OFFICIAL KNOWLEDGE BASE (Use these exact facts):
     lastBotPromptIdMap.set(chatId, messageId);
   };
 
-  const deletePreviousBotMessages = async (botToken: string, chatId: number | string, incomingMsgId?: number) => {
+  // Ultra-fast non-blocking background cleanup (does not delay bot reply to user)
+  const deletePreviousBotMessages = (botToken: string, chatId: number | string, incomingMsgId?: number) => {
     const idsToDelete = new Set<number>();
 
-    // 1. All tracked bot sent message IDs
     if (botSentMessagesMap.has(chatId)) {
       botSentMessagesMap.get(chatId)!.forEach(id => idsToDelete.add(id));
       botSentMessagesMap.get(chatId)!.clear();
@@ -262,31 +270,19 @@ OFFICIAL KNOWLEDGE BASE (Use these exact facts):
       idsToDelete.add(lastBotPromptIdMap.get(chatId)!);
       lastBotPromptIdMap.delete(chatId);
     }
-
-    // 2. Also sweep backwards 100 message IDs from incomingMsgId to delete ANY old bot or error messages
     if (incomingMsgId) {
       idsToDelete.add(incomingMsgId);
-      for (let offset = 1; offset <= 100; offset++) {
-        if (incomingMsgId - offset > 0) {
-          idsToDelete.add(incomingMsgId - offset);
-        }
-      }
     }
 
     const idList = Array.from(idsToDelete);
     if (idList.length === 0) return;
 
-    // Use Telegram batch deleteMessages API for fast instant deletion of up to 100 messages at once
-    for (let i = 0; i < idList.length; i += 100) {
-      const chunk = idList.slice(i, i + 100);
-      try {
-        await fetch(`https://api.telegram.org/bot${botToken}/deleteMessages`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ chat_id: chatId, message_ids: chunk }),
-        });
-      } catch {}
-    }
+    // Fire and forget in background
+    fetch(`https://api.telegram.org/bot${botToken}/deleteMessages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, message_ids: idList }),
+    }).catch(() => {});
   };
 
   const handleUpdate = async (update: any) => {
@@ -302,29 +298,44 @@ OFFICIAL KNOWLEDGE BASE (Use these exact facts):
       return { inline_keyboard: rows };
     };
 
-    // Helper to check user membership in all channels
-    const checkAllChannels = async (userId: number): Promise<boolean> => {
+    // Helper to check user membership in all channels in PARALLEL with cache
+    const checkAllChannels = async (userId: number, forceRefresh = false): Promise<boolean> => {
       if (!runtimeConfig.channels || runtimeConfig.channels.length === 0) return true;
-      for (const ch of runtimeConfig.channels) {
-        const cleanUsername = ch.username.replace(/^@/, '').trim();
-        try {
-          const chRes = await fetch(
-            `https://api.telegram.org/bot${token}/getChatMember?chat_id=@${cleanUsername}&user_id=${userId}`
-          );
-          const chData = await chRes.json();
-          if (chData.ok && chData.result) {
-            const status = chData.result.status;
-            if (!['creator', 'administrator', 'member'].includes(status)) {
-              return false;
-            }
-          } else {
-            return false;
-          }
-        } catch {
-          return false;
+
+      // Use cache if checked within last 15 seconds and user was verified
+      if (!forceRefresh) {
+        const cached = userMembershipCache.get(userId);
+        if (cached && Date.now() - cached.time < 15000 && cached.joined) {
+          return true;
         }
       }
-      return true;
+
+      try {
+        const checks = await Promise.all(
+          runtimeConfig.channels.map(async (ch) => {
+            const cleanUsername = ch.username.replace(/^@/, '').trim();
+            try {
+              const chRes = await fetch(
+                `https://api.telegram.org/bot${token}/getChatMember?chat_id=@${cleanUsername}&user_id=${userId}`,
+                { signal: AbortSignal.timeout(2000) }
+              );
+              const chData = await chRes.json();
+              if (chData.ok && chData.result) {
+                const status = chData.result.status;
+                return ['creator', 'administrator', 'member'].includes(status);
+              }
+              return false;
+            } catch {
+              return false;
+            }
+          })
+        );
+        const allJoined = checks.every(Boolean);
+        userMembershipCache.set(userId, { joined: allJoined, time: Date.now() });
+        return allJoined;
+      } catch {
+        return false;
+      }
     };
 
     // 1. Message received (ANY message / command / text)
@@ -352,19 +363,18 @@ OFFICIAL KNOWLEDGE BASE (Use these exact facts):
       chatProcessingLocks.set(chatId, true);
 
       try {
-        // Always sync/update user to Firebase
-        await syncUserToFirebase(user);
+        // Non-blocking Firebase sync (runs in background without delaying bot reply)
+        syncUserToFirebase(user).catch(() => {});
 
-        // STEP 1: Verify channel membership first on ANY incoming message
+        // STEP 1: Ultra-fast parallel membership check
         const allJoined = await checkAllChannels(user.id);
 
         // If user has NOT joined all channels:
-        // Delete previous bot messages so ONLY 1 single join prompt message remains!
         if (!allJoined) {
-          addLog('user', `🚫 User @${user.username || user.id} sent "${text.slice(0, 30)}" - Channels NOT joined! Deleting old bot messages to keep exactly 1 prompt...`);
+          addLog('user', `🚫 User @${user.username || user.id} sent "${text.slice(0, 30)}" - Channels NOT joined!`);
 
-          // Delete all previous bot prompt messages
-          await deletePreviousBotMessages(token, chatId, incomingMsgId);
+          // Background cleanup of older messages
+          deletePreviousBotMessages(token, chatId, incomingMsgId);
 
           const welcomeText = runtimeConfig.messages?.msgJoinFirst ||
             '🚫 <b>You must join our channels first!</b>\n\n' +
@@ -397,20 +407,15 @@ OFFICIAL KNOWLEDGE BASE (Use these exact facts):
           stats.starts++;
           addLog('user', `👤 Verified User @${user.username || user.id} sent /start`);
 
-          // Ensure bottom chat menu button is default (NO bottom bar Open App button)
-          try {
-            await fetch(`https://api.telegram.org/bot${token}/setChatMenuButton`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                chat_id: chatId,
-                menu_button: { type: 'default' },
-              }),
-            });
-          } catch {}
+          // Fire menu button reset in background
+          fetch(`https://api.telegram.org/bot${token}/setChatMenuButton`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id: chatId, menu_button: { type: 'default' } }),
+          }).catch(() => {});
 
-          // Delete prior bot messages to keep chat clean
-          await deletePreviousBotMessages(token, chatId, incomingMsgId);
+          // Background clean of previous messages
+          deletePreviousBotMessages(token, chatId, incomingMsgId);
 
           const verifiedText = runtimeConfig.messages?.msgVerified ||
             '✅ <b>অভিনন্দন! ভেরিফিকেশন সফল হয়েছে!</b>\n\n' +
@@ -452,16 +457,14 @@ OFFICIAL KNOWLEDGE BASE (Use these exact facts):
         }
 
         // For ANY other message from verified user:
-        // Send typing action & generate Gemini AI response (EXACTLY 1 REPLY) + Mini App button
         addLog('user', `💬 Verified User @${user.username || user.id} asked: "${text.slice(0, 30)}" -> Generating Gemini response...`);
 
-        try {
-          await fetch(`https://api.telegram.org/bot${token}/sendChatAction`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ chat_id: chatId, action: 'typing' }),
-          });
-        } catch {}
+        // Send typing action in background without awaiting
+        fetch(`https://api.telegram.org/bot${token}/sendChatAction`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chat_id: chatId, action: 'typing' }),
+        }).catch(() => {});
 
         const rawAiReply = await generateGeminiReply(text, undefined, undefined, runtimeConfig.gemini?.maxChars || 300);
         const aiReply = cleanAllLinksAndUrls(rawAiReply);
@@ -509,35 +512,33 @@ OFFICIAL KNOWLEDGE BASE (Use these exact facts):
       const message = cb.message;
       const chatId = message ? message.chat.id : user.id;
 
-      // Always sync user to Firebase on verify click
-      await syncUserToFirebase(user);
+      // Background Firebase sync
+      syncUserToFirebase(user).catch(() => {});
 
       if (cb.data === 'verify') {
         stats.verifies++;
-        addLog('verify', `🔍 User @${user.username || user.id} clicked ✅ Verify - checking memberships...`);
+        addLog('verify', `🔍 User @${user.username || user.id} clicked ✅ Verify - checking memberships in parallel...`);
 
-        // Check required channels
-        const allJoined = await checkAllChannels(user.id);
+        // Check required channels in parallel (force fresh check)
+        const allJoined = await checkAllChannels(user.id, true);
 
         if (allJoined) {
           addLog('success', `🎉 User @${user.username || user.id} verified successfully! Unlocking Mini App.`);
 
-          // Answer callback with popup
-          try {
-            await fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                callback_query_id: cb.id,
-                text: '✅ অভিনন্দন! ভেরিফিকেশন সফল হয়েছে!',
-              }),
-            });
-          } catch {}
+          // 1. Answer callback instantly
+          fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              callback_query_id: cb.id,
+              text: '✅ অভিনন্দন! ভেরিফিকেশন সফল হয়েছে!',
+            }),
+          }).catch(() => {});
 
-          // Delete the join prompt message (and any other prior bot messages)
-          await deletePreviousBotMessages(token, chatId, message ? message.message_id : undefined);
+          // 2. Background cleanup of previous messages
+          deletePreviousBotMessages(token, chatId, message ? message.message_id : undefined);
 
-          // Send MSG_VERIFIED with Mini App Launch Button
+          // 3. Send MSG_VERIFIED with Mini App Launch Button immediately
           const verifiedText = runtimeConfig.messages?.msgVerified ||
             '✅ <b>অভিনন্দন! ভেরিফিকেশন সফল হয়েছে!</b>\n\n' +
             '🎉 আপনি এখন বটটি ব্যবহার করার জন্য সম্পূর্ণ প্রস্তুত!\n\n' +
@@ -556,19 +557,17 @@ OFFICIAL KNOWLEDGE BASE (Use these exact facts):
             ],
           };
 
-          try {
-            // Ensure bottom chat menu button is default (NO bottom bar Open App button)
-            try {
-              await fetch(`https://api.telegram.org/bot${token}/setChatMenuButton`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  chat_id: chatId,
-                  menu_button: { type: 'default' },
-                }),
-              });
-            } catch {}
+          // Background reset menu button
+          fetch(`https://api.telegram.org/bot${token}/setChatMenuButton`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              chat_id: chatId,
+              menu_button: { type: 'default' },
+            }),
+          }).catch(() => {});
 
+          try {
             const sendRes = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -589,32 +588,28 @@ OFFICIAL KNOWLEDGE BASE (Use these exact facts):
         } else {
           addLog('info', `⚠️ User @${user.username || user.id} has not joined all channels yet.`);
 
-          // Answer callback with popup alert ONLY! DO NOT send a new message so chat remains clean with 1 message!
-          try {
-            await fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                callback_query_id: cb.id,
-                text: '❌ আপনি এখনও সব চ্যানেলে জয়েন করেননি! ৩টি চ্যানেলেই জয়েন করে আবার Verify বাটনে চাপুন।',
-                show_alert: true,
-              }),
-            });
-          } catch {}
-        }
-      } else {
-        try {
-          await fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
+          // Answer callback with popup alert instantly
+          fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ callback_query_id: cb.id }),
-          });
-        } catch {}
+            body: JSON.stringify({
+              callback_query_id: cb.id,
+              text: '❌ আপনি এখনও সব চ্যানেলে জয়েন করেননি! ৩টি চ্যানেলেই জয়েন করে আবার Verify বাটনে চাপুন।',
+              show_alert: true,
+            }),
+          }).catch(() => {});
+        }
+      } else {
+        fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ callback_query_id: cb.id }),
+        }).catch(() => {});
       }
     }
   };
 
-  // Background Telegram Long Polling Loop
+  // Background Telegram Long Polling Loop with CONCURRENT update dispatching
   const startPollingLoop = async () => {
     if (isLoopRunning) return;
     isLoopRunning = true;
@@ -637,14 +632,17 @@ OFFICIAL KNOWLEDGE BASE (Use these exact facts):
     while (botPollingActive) {
       try {
         const res = await fetch(
-          `https://api.telegram.org/bot${currentToken}/getUpdates?offset=${lastUpdateId + 1}&timeout=15`
+          `https://api.telegram.org/bot${currentToken}/getUpdates?offset=${lastUpdateId + 1}&timeout=10`
         );
         const data = await res.json();
 
         if (data.ok && Array.isArray(data.result)) {
           for (const update of data.result) {
             lastUpdateId = Math.max(lastUpdateId, update.update_id);
-            await handleUpdate(update);
+            // Process updates concurrently so NO user waits in a sequential queue!
+            handleUpdate(update).catch((err) => {
+              addLog('error', `handleUpdate: ${err?.message || err}`);
+            });
           }
         } else if (!data.ok) {
           if (data.error_code === 409) {
@@ -654,11 +652,11 @@ OFFICIAL KNOWLEDGE BASE (Use these exact facts):
           }
           stats.errors++;
           addLog('error', `Telegram getUpdates: ${data.description || 'Error'}`);
-          await new Promise((r) => setTimeout(r, 4000));
+          await new Promise((r) => setTimeout(r, 3000));
         }
       } catch (err: any) {
         // Network or timeout
-        await new Promise((r) => setTimeout(r, 2000));
+        await new Promise((r) => setTimeout(r, 1000));
       }
     }
 
