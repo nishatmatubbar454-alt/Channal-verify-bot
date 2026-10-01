@@ -243,11 +243,20 @@ OFFICIAL KNOWLEDGE BASE (Use these exact facts):
     return cleanAllLinksAndUrls(reply);
   };
 
-  // Track sent bot message IDs for complete chat cleanup
+  // Track sent bot message IDs and chat message history for complete chat cleanup
+  const chatMessageHistory = new Map<number | string, Set<number>>();
   const botSentMessagesMap = new Map<number | string, Set<number>>();
   const lastBotPromptIdMap = new Map<number | string, number>();
   const processedMessageIds = new Set<string>();
   const chatProcessingLocks = new Map<number | string, boolean>();
+
+  const trackChatMessage = (chatId: number | string, messageId?: number) => {
+    if (!messageId) return;
+    if (!chatMessageHistory.has(chatId)) {
+      chatMessageHistory.set(chatId, new Set<number>());
+    }
+    chatMessageHistory.get(chatId)!.add(messageId);
+  };
 
   const recordBotMessage = (chatId: number | string, messageId?: number) => {
     if (!messageId) return;
@@ -256,6 +265,64 @@ OFFICIAL KNOWLEDGE BASE (Use these exact facts):
     }
     botSentMessagesMap.get(chatId)!.add(messageId);
     lastBotPromptIdMap.set(chatId, messageId);
+    trackChatMessage(chatId, messageId);
+  };
+
+  // Ultra-fast non-blocking background cleanup: delete ALL chat messages EXCEPT keepMsgId
+  const deleteAllChatMessagesExcept = (botToken: string, chatId: number | string, keepMsgId?: number) => {
+    const history = chatMessageHistory.get(chatId);
+    const idsToDelete = new Set<number>();
+
+    if (history) {
+      history.forEach((id) => {
+        if (!keepMsgId || id !== keepMsgId) {
+          idsToDelete.add(id);
+        }
+      });
+      history.clear();
+      if (keepMsgId) {
+        history.add(keepMsgId);
+      }
+    }
+
+    if (botSentMessagesMap.has(chatId)) {
+      botSentMessagesMap.get(chatId)!.forEach((id) => {
+        if (!keepMsgId || id !== keepMsgId) {
+          idsToDelete.add(id);
+        }
+      });
+      botSentMessagesMap.get(chatId)!.clear();
+    }
+
+    if (keepMsgId) {
+      recordBotMessage(chatId, keepMsgId);
+    }
+
+    const idList = Array.from(idsToDelete);
+    if (idList.length === 0) return;
+
+    // Delete messages in background
+    for (let i = 0; i < idList.length; i += 100) {
+      const chunk = idList.slice(i, i + 100);
+      fetch(`https://api.telegram.org/bot${botToken}/deleteMessages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: chatId, message_ids: chunk }),
+      })
+        .then((res) => res.json())
+        .then((data) => {
+          if (!data.ok) {
+            chunk.forEach((mid) => {
+              fetch(`https://api.telegram.org/bot${botToken}/deleteMessage`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ chat_id: chatId, message_id: mid }),
+              }).catch(() => {});
+            });
+          }
+        })
+        .catch(() => {});
+    }
   };
 
   // Ultra-fast non-blocking background cleanup (does not delay bot reply to user)
@@ -347,6 +414,9 @@ OFFICIAL KNOWLEDGE BASE (Use these exact facts):
 
       if (!user) return;
 
+      // Track incoming user message so it can be cleanly deleted if needed
+      trackChatMessage(chatId, incomingMsgId);
+
       // Prevent duplicate processing of the exact same message
       const msgKey = `${chatId}:${incomingMsgId}`;
       if (processedMessageIds.has(msgKey)) return;
@@ -366,15 +436,12 @@ OFFICIAL KNOWLEDGE BASE (Use these exact facts):
         // Non-blocking Firebase sync (runs in background without delaying bot reply)
         syncUserToFirebase(user).catch(() => {});
 
-        // STEP 1: Ultra-fast parallel membership check
-        const allJoined = await checkAllChannels(user.id);
+        // STEP 1: Process and verify channel membership in real-time first on ANY message
+        const allJoined = await checkAllChannels(user.id, true);
 
         // If user has NOT joined all channels:
         if (!allJoined) {
-          addLog('user', `🚫 User @${user.username || user.id} sent "${text.slice(0, 30)}" - Channels NOT joined!`);
-
-          // Background cleanup of older messages
-          deletePreviousBotMessages(token, chatId, incomingMsgId);
+          addLog('user', `🚫 User @${user.username || user.id} sent "${text.slice(0, 30)}" - Channels NOT joined! Deleting all messages except request message...`);
 
           const welcomeText = runtimeConfig.messages?.msgJoinFirst ||
             '🚫 <b>You must join our channels first!</b>\n\n' +
@@ -393,7 +460,12 @@ OFFICIAL KNOWLEDGE BASE (Use these exact facts):
             });
             const sendData = await sendRes.json();
             if (sendData.ok && sendData.result?.message_id) {
-              recordBotMessage(chatId, sendData.result.message_id);
+              const requestMsgId = sendData.result.message_id;
+              recordBotMessage(chatId, requestMsgId);
+              // CRITICAL: Delete ALL messages in chat EXCEPT this single join request message!
+              deleteAllChatMessagesExcept(token, chatId, requestMsgId);
+            } else {
+              deletePreviousBotMessages(token, chatId, incomingMsgId);
             }
           } catch (err: any) {
             addLog('error', `Failed to send join channels: ${err.message}`);
