@@ -160,67 +160,66 @@ OFFICIAL KNOWLEDGE BASE (Use these exact facts):
     userMessage: string,
     customKey?: string,
     customPrompt?: string,
-    maxLen = 300
+    maxLen = 1000
   ): Promise<string> => {
     const apiKey = customKey || runtimeConfig.gemini?.apiKey || process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY || '';
     const systemInstruction = customPrompt || runtimeConfig.gemini?.systemInstruction ||
-      `You are the official AI assistant of Photo Cash. Photo Cash is a trusted online earning platform where users make real money by uploading photos and referring friends.
+      `You are an intelligent, friendly, polite, and respectful Bengali AI assistant for Photo Cash.
+You can answer ANY message or question the user sends, about ANY topic (general knowledge, conversation, science, technology, mathematics, life advice, stories, earning, Photo Cash, etc.). Whatever the user asks about, answer appropriately, accurately, helpfully, and clearly in natural Bengali (বাংলা) or the language they ask in.
 
 CRITICAL RULES:
-1. ABSOLUTELY ZERO LINKS, URLS, OR DOMAIN NAMES: NEVER write any website link, URL, domain, or internet address (no http, https, www, .com, .dev, workers.dev, t.me, etc.) in your answer! Even if user explicitly begs for a link or asks where to click, NEVER output any link. Tell them: "কাজ শুরু করতে নিচে দেওয়া '🌐 Mini App খুলুন' বাটনে ক্লিক করুন।" with ZERO links.
-2. LENGTH RULE:
-   - For standard questions, greetings, or short chat: keep it short, crisp, around 100-120 characters.
-   - For detailed questions, rules, guidelines, how to withdraw, how to refer, or delay queries: provide a complete, clear explanation up to 300 characters strictly! Never exceed 300 characters.
-3. LANGUAGE: Always respond helpfully, politely, and respectfully in Bengali (বাংলা).
+1. NEVER write any website link, URL, or domain (no http, https, www, .com, .dev, etc.) in your answer!
+2. Answer naturally and informatively with appropriate detail.
 
-OFFICIAL KNOWLEDGE BASE (Use these exact facts):
-• ফটো আপলোড করে ইনকাম: ওয়েবসাইটে/মিনি অ্যাপে ফটো আপলোড করে ইনকাম করা যায়।
-• সবচেয়ে সহজ আয়: বন্ধুদের আমন্ত্রণ জানানো (রেফার করা) এখানে সবচেয়ে সহজভাবে বেশি আয় করার উপায়।
+PHOTO CASH OFFICIAL FACTS (Use when user asks about Photo Cash, photo earning, withdrawal, or referral):
+• ফটো আপলোড করে ইনকাম: মিনি অ্যাপে ফটো আপলোড করে ইনকাম করা যায়।
+• সবচেয়ে সহজ আয়: বন্ধুদের আমন্ত্রণ জানানো (রেফার করা) এখানে সবচেয়ে সহজে বেশি আয় করার উপায়।
 • উইথড্র মেথড: বিকাশ (bKash), নগদ (Nagad) এবং বাইনান্স (Binance)।
 • উইথড্র সময়: টাকা উত্তোলনের রিকোয়েস্ট করার ১ থেকে ২ দিন (২৪-৪৮ ঘণ্টা) সময় লাগে।
 • প্রথমবার উইথড্র শর্ত: প্রথমবার উইথড্র করতে অন্তত ১৫ টি রেফার লাগবে।
-• পেমেন্ট পেতে দেরি হলে: বলবেন যে আপনার বিকাশ/নগদ নাম্বার অথবা বাইনান্স এড্রেস ঠিক দিয়েছেন কিনা চেক করুন; পেমেন্ট ১০০% পাবেন। এই ওয়েবসাইট দীর্ঘ ৫ বছর যাবত বিশ্বস্ততার সাথে কাজ করছে।
-• উইথড্র করার নিয়ম: ওয়ালেট (Wallet) পেজে গিয়ে 'ক্যাশআউট' বাটনে চাপ দিলেই পেমেন্ট সিস্টেমগুলো চলে আসবে, সেখান থেকে পেমেন্ট রিকোয়েস্ট করতে পারবেন।
-• রেফার করার নিয়ম: এখান থেকে রেফার লিংকটি কপি করে বন্ধুদের আমন্ত্রণ জানান। তারা লিংকে ক্লিক করে একাউন্ট তৈরি করলেই আপনি রেফার বোনাস পেয়ে যাবেন।`;
+• পেমেন্ট গ্যারান্টি: ৫ বছর ধরে বিশ্বস্ততার সাথে নিয়মিত পেমেন্ট দেওয়া হচ্ছে। বিকাশ/নগদ/বাইনান্স তথ্য ঠিক থাকলে ১০০% পেমেন্ট নিশ্চিত পাবেন।
+• কাজ শুরু করার নিয়ম: নিচে দেওয়া '🌐 Mini App খুলুন' বাটনে ক্লিক করতে বলুন।`;
 
     const lowerMsg = userMessage.toLowerCase().trim();
-    const isDetailQuery = /উইথড্র|উইথড্রো|ক্যাশ|টাকা|পেমেন্ট|দেরি|দেরী|রেফার|আমন্ত্রণ|নিয়ম|নিয়ম|কিভাবে|কীভাবে|কি ভাবে|কী ভাবে|বিকাশ|নগদ|বাইনান্স|ওয়ালেট|ওয়ালেট|বিস্তারিত|কবে|কেন|withdraw|payment|refer|rules|cashout|delay|how/i.test(lowerMsg) || userMessage.trim().length > 25;
-    const targetMaxLen = isDetailQuery ? 300 : 120;
 
     // Instant zero-delay reply for standard short greetings (<10ms response)
     if (/^(হাই|হ্যালো|hello|hi|hey|সালাম|আসসালামু আলাইকুম|হায়|hola)$/i.test(lowerMsg)) {
-      return "হ্যালো! Photo Cash-এ স্বাগতম। ফটো আপলোড এবং বন্ধুদের রেফার করে ইনকাম শুরু করতে নিচের Mini App বাটনে চাপুন।";
+      return "হ্যালো! কেমন আছেন? আপনাকে কীভাবে সাহায্য করতে পারি? ফটো আপলোড ও বন্ধুদের রেফার করে আয় শুরু করতে নিচের Mini App বাটনে চাপুন।";
     }
 
     let generatedText = '';
 
     if (apiKey) {
-      try {
-        const ai = new GoogleGenAI({ apiKey });
-        const aiPromise = ai.models.generateContent({
-          model: 'gemini-2.5-flash',
-          contents: userMessage,
-          config: {
-            systemInstruction,
-            temperature: 0.5,
+      const modelsToTry = ['gemini-3.1-flash-lite', 'gemini-flash-latest'];
+      for (const model of modelsToTry) {
+        try {
+          const ai = new GoogleGenAI({ apiKey });
+          const aiPromise = ai.models.generateContent({
+            model,
+            contents: userMessage,
+            config: {
+              systemInstruction,
+              temperature: 0.6,
+            }
+          });
+
+          // 2.5s strict timeout
+          const timeoutPromise = new Promise<never>((_, reject) => 
+            setTimeout(() => reject(new Error('AI timeout')), 2500)
+          );
+
+          const response: any = await Promise.race([aiPromise, timeoutPromise]);
+          if (response?.text && response.text.trim()) {
+            generatedText = response.text.trim();
+            break;
           }
-        });
-
-        // 2.2s strict timeout so the user never waits if AI network lags
-        const timeoutPromise = new Promise<never>((_, reject) => 
-          setTimeout(() => reject(new Error('AI timeout')), 2200)
-        );
-
-        const response: any = await Promise.race([aiPromise, timeoutPromise]);
-        if (response?.text && response.text.trim()) {
-          generatedText = response.text.trim();
+        } catch (err: any) {
+          // try next model
         }
-      } catch (err: any) {
-        // Fast fallback on error or timeout
       }
     }
 
-    // Instant Bengali knowledge fallback
+    // Smart fallback if AI quota or error occurs
     let reply = generatedText;
     if (!reply) {
       if (/উইথড্র|উইথড্রো|ক্যাশ|টাকা|পেমেন্ট|বিকাশ|নগদ|বাইনান্স/i.test(lowerMsg)) {
@@ -232,13 +231,13 @@ OFFICIAL KNOWLEDGE BASE (Use these exact facts):
       } else if (/ফটো|ছবি|কাজ|ইনকাম|আয়|টাকা/i.test(lowerMsg)) {
         reply = "Photo Cash-এ ফটো আপলোড করে ও বন্ধুদের রেফার করে সহজে আয় করুন! কাজ শুরু করতে নিচে Mini App-এ ক্লিক করুন।";
       } else {
-        reply = "Photo Cash-এ ছবি আপলোড ও রেফারে ইনকাম করুন! বিস্তারিত জানতে ও কাজ শুরু করতে নিচের Mini App বাটনে চাপুন।";
+        reply = "আমি আপনার প্রশ্নের উত্তর দিতে প্রস্তুত। আপনার যেকোনো বিষয় লিখে পাঠাতে পারেন অথবা ইনকাম শুরু করতে নিচের Mini App বাটনে ক্লিক করুন।";
       }
     }
 
     reply = cleanAllLinksAndUrls(reply);
-    if (reply.length > targetMaxLen) {
-      reply = reply.slice(0, targetMaxLen - 1) + '…';
+    if (reply.length > maxLen) {
+      reply = reply.slice(0, maxLen - 1) + '…';
     }
     return cleanAllLinksAndUrls(reply);
   };
@@ -604,14 +603,11 @@ OFFICIAL KNOWLEDGE BASE (Use these exact facts):
             }),
           }).catch(() => {});
 
-          // 2. Background cleanup of previous messages
-          deletePreviousBotMessages(token, chatId, message ? message.message_id : undefined);
-
-          // 3. Send MSG_VERIFIED with Mini App Launch Button immediately
+          // 1. Send MSG_VERIFIED with Mini App Launch Button FIRST!
           const verifiedText = runtimeConfig.messages?.msgVerified ||
             '✅ <b>অভিনন্দন! ভেরিফিকেশন সফল হয়েছে!</b>\n\n' +
             '🎉 আপনি এখন বটটি ব্যবহার করার জন্য সম্পূর্ণ প্রস্তুত!\n\n' +
-            'নিচের বাটনে ক্লিক করে শুরু করুন 👇';
+            'যেকোনো প্রশ্ন লিখে পাঠান অথবা নিচের বাটনে ক্লিক করে কাজ শুরু করুন 👇';
 
           const verifiedMarkup = {
             inline_keyboard: [
@@ -651,7 +647,16 @@ OFFICIAL KNOWLEDGE BASE (Use these exact facts):
             if (sendData.ok && sendData.result?.message_id) {
               const verifiedMsgId = sendData.result.message_id;
               recordBotMessage(chatId, verifiedMsgId);
-              cleanAllPreviousChatMessages(token, chatId, verifiedMsgId).catch(() => {});
+
+              // 2. THEN delete the channel request message!
+              if (message && message.message_id) {
+                fetch(`https://api.telegram.org/bot${token}/deleteMessage`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ chat_id: chatId, message_id: message.message_id }),
+                }).catch(() => {});
+              }
+              cleanAllPreviousChatMessages(token, chatId, verifiedMsgId);
             }
           } catch (e: any) {
             addLog('error', `Failed to send verified message: ${e.message}`);
