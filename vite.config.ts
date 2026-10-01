@@ -269,59 +269,51 @@ OFFICIAL KNOWLEDGE BASE (Use these exact facts):
   };
 
   // Ultra-fast non-blocking background cleanup: delete ALL chat messages EXCEPT keepMsgId
-  const deleteAllChatMessagesExcept = (botToken: string, chatId: number | string, keepMsgId?: number) => {
-    const history = chatMessageHistory.get(chatId);
+  const cleanAllPreviousChatMessages = async (botToken: string, chatId: number | string, keepMsgId: number) => {
     const idsToDelete = new Set<number>();
 
-    if (history) {
-      history.forEach((id) => {
-        if (!keepMsgId || id !== keepMsgId) {
-          idsToDelete.add(id);
-        }
-      });
-      history.clear();
-      if (keepMsgId) {
-        history.add(keepMsgId);
-      }
-    }
-
+    // 1. All tracked bot sent message IDs (except keepMsgId)
     if (botSentMessagesMap.has(chatId)) {
       botSentMessagesMap.get(chatId)!.forEach((id) => {
-        if (!keepMsgId || id !== keepMsgId) {
-          idsToDelete.add(id);
-        }
+        if (id !== keepMsgId) idsToDelete.add(id);
       });
       botSentMessagesMap.get(chatId)!.clear();
     }
+    // Record keepMsgId as the single active message
+    recordBotMessage(chatId, keepMsgId);
 
-    if (keepMsgId) {
-      recordBotMessage(chatId, keepMsgId);
+    // 2. All tracked history IDs (except keepMsgId)
+    if (chatMessageHistory.has(chatId)) {
+      chatMessageHistory.get(chatId)!.forEach((id) => {
+        if (id !== keepMsgId) idsToDelete.add(id);
+      });
+      chatMessageHistory.get(chatId)!.clear();
+      chatMessageHistory.get(chatId)!.add(keepMsgId);
+    }
+
+    // 3. Sweep backwards from keepMsgId - 1 for 60 messages to erase all previous exchanged messages
+    for (let offset = 1; offset <= 60; offset++) {
+      const mid = keepMsgId - offset;
+      if (mid > 0) {
+        idsToDelete.add(mid);
+      }
     }
 
     const idList = Array.from(idsToDelete);
     if (idList.length === 0) return;
 
-    // Delete messages in background
-    for (let i = 0; i < idList.length; i += 100) {
-      const chunk = idList.slice(i, i + 100);
-      fetch(`https://api.telegram.org/bot${botToken}/deleteMessages`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chat_id: chatId, message_ids: chunk }),
-      })
-        .then((res) => res.json())
-        .then((data) => {
-          if (!data.ok) {
-            chunk.forEach((mid) => {
-              fetch(`https://api.telegram.org/bot${botToken}/deleteMessage`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ chat_id: chatId, message_id: mid }),
-              }).catch(() => {});
-            });
-          }
-        })
-        .catch(() => {});
+    // Delete concurrently in small batches to respect Telegram API limits
+    for (let i = 0; i < idList.length; i += 10) {
+      const chunk = idList.slice(i, i + 10);
+      await Promise.allSettled(
+        chunk.map((mid) =>
+          fetch(`https://api.telegram.org/bot${botToken}/deleteMessage`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id: chatId, message_id: mid }),
+          })
+        )
+      );
     }
   };
 
@@ -462,10 +454,8 @@ OFFICIAL KNOWLEDGE BASE (Use these exact facts):
             if (sendData.ok && sendData.result?.message_id) {
               const requestMsgId = sendData.result.message_id;
               recordBotMessage(chatId, requestMsgId);
-              // CRITICAL: Delete ALL messages in chat EXCEPT this single join request message!
-              deleteAllChatMessagesExcept(token, chatId, requestMsgId);
-            } else {
-              deletePreviousBotMessages(token, chatId, incomingMsgId);
+              // CRITICAL: Delete ALL previous messages in chat so ONLY this single join request message remains!
+              cleanAllPreviousChatMessages(token, chatId, requestMsgId).catch(() => {});
             }
           } catch (err: any) {
             addLog('error', `Failed to send join channels: ${err.message}`);
@@ -573,7 +563,9 @@ OFFICIAL KNOWLEDGE BASE (Use these exact facts):
           addLog('error', `Failed to send AI message: ${err.message}`);
         }
       } finally {
-        chatProcessingLocks.delete(chatId);
+        setTimeout(() => {
+          chatProcessingLocks.delete(chatId);
+        }, 500);
       }
     }
 
@@ -652,7 +644,9 @@ OFFICIAL KNOWLEDGE BASE (Use these exact facts):
             });
             const sendData = await sendRes.json();
             if (sendData.ok && sendData.result?.message_id) {
-              recordBotMessage(chatId, sendData.result.message_id);
+              const verifiedMsgId = sendData.result.message_id;
+              recordBotMessage(chatId, verifiedMsgId);
+              cleanAllPreviousChatMessages(token, chatId, verifiedMsgId).catch(() => {});
             }
           } catch (e: any) {
             addLog('error', `Failed to send verified message: ${e.message}`);
