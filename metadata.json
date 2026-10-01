@@ -1,0 +1,6 @@
+{
+  "name": "Telegram Bot Admin Panel & Manager",
+  "description": "Admin panel to configure Telegram bot token, verification channels, web app URLs, and system messages with live interactive preview and code export.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
