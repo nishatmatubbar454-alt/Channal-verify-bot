@@ -666,16 +666,9 @@ OFFICIAL KNOWLEDGE BASE (Use these exact facts):
     addLog('info', '🛑 Live Telegram Bot Poller stopped.');
   };
 
-  return {
-    name: 'telegram-api-proxy',
-    configureServer(server) {
-      // Start live polling ONLY in dev server mode, NEVER during vite build!
-      if (!isLoopRunning) {
-        setTimeout(startPollingLoop, 500);
-      }
-
-      // 1. Verify Bot Token
-      server.middlewares.use('/api/telegram-verify', async (req, res) => {
+  const registerMiddlewares = (server: any) => {
+    // 1. Verify Bot Token
+    server.middlewares.use('/api/telegram-verify', async (req: any, res: any) => {
         const url = new URL(req.url || '', `http://${req.headers.host}`);
         const token = url.searchParams.get('token');
 
@@ -1057,6 +1050,21 @@ OFFICIAL KNOWLEDGE BASE (Use these exact facts):
 
         res.end(JSON.stringify({ ok: true, config: runtimeConfig }));
       });
+  };
+
+  return {
+    name: 'telegram-api-proxy',
+    configureServer(server: any) {
+      if (!isLoopRunning) {
+        setTimeout(startPollingLoop, 500);
+      }
+      registerMiddlewares(server);
+    },
+    configurePreviewServer(server: any) {
+      if (!isLoopRunning) {
+        setTimeout(startPollingLoop, 500);
+      }
+      registerMiddlewares(server);
     },
   };
 }
@@ -1070,8 +1078,14 @@ export default defineConfig(() => {
       },
     },
     server: {
+      port: process.env.PORT ? parseInt(process.env.PORT, 10) : 3000,
+      host: '0.0.0.0',
       hmr: process.env.DISABLE_HMR !== 'true',
       watch: process.env.DISABLE_HMR === 'true' ? null : {},
+    },
+    preview: {
+      port: process.env.PORT ? parseInt(process.env.PORT, 10) : 10000,
+      host: '0.0.0.0',
     },
   };
 });
