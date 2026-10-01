@@ -1080,12 +1080,14 @@ export default defineConfig(() => {
     server: {
       port: process.env.PORT ? parseInt(process.env.PORT, 10) : 3000,
       host: '0.0.0.0',
+      allowedHosts: true,
       hmr: process.env.DISABLE_HMR !== 'true',
       watch: process.env.DISABLE_HMR === 'true' ? null : {},
     },
     preview: {
       port: process.env.PORT ? parseInt(process.env.PORT, 10) : 10000,
       host: '0.0.0.0',
+      allowedHosts: true,
     },
   };
 });
