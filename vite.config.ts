@@ -269,7 +269,7 @@ OFFICIAL KNOWLEDGE BASE (Use these exact facts):
   };
 
   // Ultra-fast non-blocking background cleanup: delete ALL chat messages EXCEPT keepMsgId
-  const cleanAllPreviousChatMessages = async (botToken: string, chatId: number | string, keepMsgId: number) => {
+  const cleanAllPreviousChatMessages = (botToken: string, chatId: number | string, keepMsgId: number) => {
     const idsToDelete = new Set<number>();
 
     // 1. All tracked bot sent message IDs (except keepMsgId)
@@ -291,8 +291,8 @@ OFFICIAL KNOWLEDGE BASE (Use these exact facts):
       chatMessageHistory.get(chatId)!.add(keepMsgId);
     }
 
-    // 3. Sweep backwards from keepMsgId - 1 for 60 messages to erase all previous exchanged messages
-    for (let offset = 1; offset <= 60; offset++) {
+    // 3. Delete immediate previous messages above keepMsgId (up to 4)
+    for (let offset = 1; offset <= 4; offset++) {
       const mid = keepMsgId - offset;
       if (mid > 0) {
         idsToDelete.add(mid);
@@ -302,19 +302,26 @@ OFFICIAL KNOWLEDGE BASE (Use these exact facts):
     const idList = Array.from(idsToDelete);
     if (idList.length === 0) return;
 
-    // Delete concurrently in small batches to respect Telegram API limits
-    for (let i = 0; i < idList.length; i += 10) {
-      const chunk = idList.slice(i, i + 10);
-      await Promise.allSettled(
-        chunk.map((mid) =>
-          fetch(`https://api.telegram.org/bot${botToken}/deleteMessage`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ chat_id: chatId, message_id: mid }),
-          })
-        )
-      );
-    }
+    // Single fast batch delete call (fire-and-forget in background)
+    fetch(`https://api.telegram.org/bot${botToken}/deleteMessages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, message_ids: idList }),
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        if (!data.ok) {
+          // If batch fails, delete individually in background
+          idList.slice(0, 5).forEach((mid) => {
+            fetch(`https://api.telegram.org/bot${botToken}/deleteMessage`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ chat_id: chatId, message_id: mid }),
+            }).catch(() => {});
+          });
+        }
+      })
+      .catch(() => {});
   };
 
   // Ultra-fast non-blocking background cleanup (does not delay bot reply to user)
@@ -429,7 +436,7 @@ OFFICIAL KNOWLEDGE BASE (Use these exact facts):
         syncUserToFirebase(user).catch(() => {});
 
         // STEP 1: Process and verify channel membership in real-time first on ANY message
-        const allJoined = await checkAllChannels(user.id, true);
+        const allJoined = await checkAllChannels(user.id, false);
 
         // If user has NOT joined all channels:
         if (!allJoined) {
@@ -563,9 +570,7 @@ OFFICIAL KNOWLEDGE BASE (Use these exact facts):
           addLog('error', `Failed to send AI message: ${err.message}`);
         }
       } finally {
-        setTimeout(() => {
-          chatProcessingLocks.delete(chatId);
-        }, 500);
+        chatProcessingLocks.delete(chatId);
       }
     }
 
